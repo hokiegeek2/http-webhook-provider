@@ -1,0 +1,88 @@
+plugins {
+    id 'java'
+    id 'maven-publish'
+    // Shadow moved to GradleUp + stays compatible with newer Gradle versions
+    id 'com.gradleup.shadow' version '9.3.1'
+}
+
+// Inherit from top-level build.gradle (multi-module friendly)
+group = rootProject.group
+version = rootProject.version
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+ext {
+    // If you already define this in the root build.gradle or gradle.properties, remove it here.
+    keycloakVersion = '26.5.3'
+}
+
+dependencies {
+    // Server dependency BOM so keycloak-services / spi-private / saml-core-public get versions
+    implementation(enforcedPlatform("org.keycloak:keycloak-dependencies-server-all:${keycloakVersion}"))
+
+    // Keycloak APIs are provided by the server at runtime -> compileOnly (not included in fat jar)
+    compileOnly "org.keycloak:keycloak-core"
+    compileOnly "org.keycloak:keycloak-server-spi"
+    compileOnly "org.keycloak:keycloak-server-spi-private"
+    compileOnly "org.keycloak:keycloak-services"
+    compileOnly "org.keycloak:keycloak-saml-core-public"
+
+    // Your bundled deps (these WILL be included in the shaded jar)
+    implementation "com.squareup.okhttp3:okhttp:4.9.0"
+    implementation "com.fasterxml.jackson.core:jackson-databind:2.11.3"
+}
+
+// We want only the shaded jar as the build output
+tasks.jar {
+    enabled = false
+}
+
+tasks.shadowJar {
+    archiveBaseName.set("keycloak_http_webhook_provider")
+    archiveClassifier.set("") // no "-all"
+    archiveVersion.set(project.version.toString())
+
+    // Avoid runtime conflicts inside Keycloak by relocating bundled libs
+    relocate "okhttp3", "org.svenstaro.keycloak.shaded.okhttp3"
+    relocate "okio", "org.svenstaro.keycloak.shaded.okio"
+    relocate "com.fasterxml.jackson", "org.svenstaro.keycloak.shaded.com.fasterxml.jackson"
+
+    // Useful if any deps use META-INF/services
+    mergeServiceFiles()
+}
+
+tasks.build {
+    dependsOn tasks.shadowJar
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            groupId = rootProject.group.toString()
+            artifactId = 'keycloak_http_webhook_provider'
+            version = rootProject.version.toString()
+
+            // publish shaded jar as the main artifact
+            artifact(tasks.shadowJar)
+        }
+    }
+
+    repositories {
+        maven {
+            name = "github"
+            url = uri("https://maven.pkg.github.com/svenstaro/keycloak-http-webhook-provider")
+            credentials {
+                username = (findProperty("gpr.user") ?: System.getenv("GITHUB_ACTOR"))?.toString()
+                password = (findProperty("gpr.key") ?: System.getenv("GITHUB_TOKEN"))?.toString()
+            }
+        }
+    }
+}
